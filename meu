@@ -1,0 +1,1153 @@
+-- ============================================================
+-- 🐾 CAPIVARA · HUB v8.2.0 (FIX: compat PlaceId + toggles Ferramentas)
+-- ============================================================
+
+print("[HUB] Iniciando nova sessão")
+
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+
+local Player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local env = (getgenv and getgenv()) or _G
+
+env.CapivaraToolConns = env.CapivaraToolConns or {}
+
+local DEBUG = true
+local function Log(...)
+    if DEBUG then print("[HUB-DEBUG]", ...) end
+end
+
+-- SECAO 1: SESSAO
+local ActiveConnections = {}
+local ActiveThreads = {}
+
+local function RegistrarConexao(conn)
+    if conn then table.insert(ActiveConnections, conn) end
+end
+
+local function RemoverConexao(conn)
+    if not conn then return end
+    for i = #ActiveConnections, 1, -1 do
+        if ActiveConnections[i] == conn then table.remove(ActiveConnections, i) end
+    end
+end
+
+local function RegistrarThread(thread)
+    if thread then table.insert(ActiveThreads, thread) end
+end
+
+if env.CapivaraHubSession then
+    pcall(function()
+        if type(env.CapivaraHubSession.CleanUp) == "function" then env.CapivaraHubSession.CleanUp() end
+    end)
+    env.CapivaraHubSession = nil
+end
+
+local function LimparSessao()
+    env.CapivaraHubActive = false
+    for _, conn in ipairs(ActiveConnections) do
+        pcall(function() if conn and typeof(conn) == "RBXScriptConnection" then conn:Disconnect() end end)
+    end
+    ActiveConnections = {}
+    for _, thread in ipairs(ActiveThreads) do
+        pcall(function() task.cancel(thread) end)
+    end
+    ActiveThreads = {}
+    if env.CapivaraToolConns then
+        for _, conn in pairs(env.CapivaraToolConns) do
+            pcall(function() if conn and typeof(conn) == "RBXScriptConnection" then conn:Disconnect() end end)
+        end
+        env.CapivaraToolConns = {}
+    end
+    if env.CapivaraHubWindow then
+        pcall(function() env.CapivaraHubWindow:Destroy() end)
+        env.CapivaraHubWindow = nil
+    end
+end
+
+env.CapivaraHubSession = { CleanUp = LimparSessao }
+env.CapivaraHubActive = true
+
+-- SECAO 2: ESTADO E DADOS
+local Estado = { tela = "Home", jogoSelecionado = nil, busca = "" }
+
+local Ferramentas = {
+    RestaurarCursor = false,
+    InstantInteract = false
+}
+
+local MapaJogos = {
+    ["Mad City: Chapter 2"] = { placeIds = {1224212277, 1184429191}, defaultId = 1184429191 },
+    ["Eb do Delta"] = { placeIds = {14511049, 73283852203739}, defaultId = 73283852203739 },
+    ["Dusty Trip"] = { placeIds = {16389395869}, defaultId = 16389395869 },
+    ["Eb do Apex Hard"] = { placeIds = {2069320852}, defaultId = 2069320852 },
+    ["Guts & Blackpowder"] = { placeIds = {12334109280}, defaultId = 12334109280 },
+    ["Cart Ride Around Nothing"] = { placeIds = {10660791703}, defaultId = 10660791703 }
+}
+
+local ListaJogos = {
+    { nome = "Eb do Delta", desc = "Menu exclusivo para o EB do Delta.", scripts = {
+        { nome = "Drip Menu Principal", desc = "Menu exclusivo para o EB do Delta.", url = "https://raw.githubusercontent.com/DripMenu/willz-and-prod-gio-/refs/heads/main/obfuscated%20(1).lua.txt" }
+    }},
+    { nome = "Dusty Trip", desc = "Auto-farm, teleportes e recursos.", scripts = {
+        { nome = "Dusty Trip Utility", desc = "Auto-farm, teleportes e recursos.", url = "https://raw.githubusercontent.com/xxqLgnd/Utilities/main/DustyTrip" }
+    }},
+    { nome = "Eb do Apex Hard", desc = "Sistema Apex Hard atualizado.", scripts = {
+        { nome = "michigun", desc = "Sistema Apex Hard atualizado.", isApexHard = true,
+          urlFree = "https://standard.michigun.xyz", urlPremium = "https://premium.michigun.xyz" }
+    }},
+    { nome = "Guts & Blackpowder", desc = "Munição infinita e aimbot.", scripts = {
+        { nome = "Katchi HUB", desc = "Munição infinita e aimbot.", url = "https://api.jnkie.com/api/v1/luascripts/public/716e6083239381ecd8b1f0591e383b2005a6fd5d87ede30645fac4f53e764d4a/download" }
+    }},
+    { nome = "Mad City: Chapter 2", desc = "Auto-rob, aimbot e ESP.", scripts = {
+        { nome = "RubyHub", desc = "Auto-rob, aimbot e ESP.", url = "https://raw.githubusercontent.com/aymarko/RubyHub/main/MadCity/Chapter2/Main.lua" }
+    }},
+    { nome = "Cart Ride Around Nothing", desc = "Controle total do carrinho.", scripts = {
+        { nome = "Cart Ride Fun", desc = "Controle total do carrinho.", url = "https://raw.githubusercontent.com/TheSunne/luau/refs/heads/main/cartridearoundnothing.lua" }
+    }}
+}
+
+Log("ListaJogos carregada:", #ListaJogos, "jogos")
+
+-- SECAO 3: DESIGN SYSTEM
+local C = {
+    bg = Color3.fromRGB(10, 10, 12),
+    sidebar = Color3.fromRGB(13, 13, 16),
+    surface = Color3.fromRGB(17, 17, 21),
+    surface2 = Color3.fromRGB(21, 21, 26),
+    surface3 = Color3.fromRGB(26, 26, 32),
+    border = Color3.fromRGB(33, 33, 39),
+    borderSoft = Color3.fromRGB(27, 27, 33),
+    text = Color3.fromRGB(236, 236, 242),
+    sub = Color3.fromRGB(150, 150, 162),
+    muted = Color3.fromRGB(104, 104, 117),
+    accent = Color3.fromRGB(120, 165, 255),
+    accentSoft = Color3.fromRGB(40, 56, 92)
+}
+
+local SP = { xs = 4, sm = 8, md = 12, lg = 16, xl = 24 }
+local T = { title = 17, game = 15, item = 13, body = 12, small = 11, micro = 10 }
+
+local EASE = TweenInfo.new(0.24, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+local EASE_IN = TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+local FAST = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local NONE = TweenInfo.new(0)
+
+-- SECAO 4: HELPERS
+local function Inst(cls, props, parent)
+    local o = Instance.new(cls)
+    for k, v in pairs(props or {}) do o[k] = v end
+    if parent then o.Parent = parent end
+    return o
+end
+
+local function Tween(o, t, props)
+    local tw = TweenService:Create(o, t, props)
+    tw:Play()
+    return tw
+end
+
+local function Corner(o, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r or 8)
+    c.Parent = o
+    return c
+end
+
+local function Stroke(o, color)
+    local s = Instance.new("UIStroke")
+    s.Color = color or C.border
+    s.Thickness = 1
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Parent = o
+    return s
+end
+
+local function Pad(o, l, t, r, b)
+    local p = Instance.new("UIPadding")
+    p.PaddingLeft = UDim.new(0, l or 0)
+    p.PaddingTop = UDim.new(0, t or l or 0)
+    p.PaddingRight = UDim.new(0, r or l or 0)
+    p.PaddingBottom = UDim.new(0, b or t or l or 0)
+    p.Parent = o
+    return p
+end
+
+local function Lista(o, gap, dir)
+    local l = Instance.new("UIListLayout")
+    l.Padding = UDim.new(0, gap or SP.sm)
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.FillDirection = dir or Enum.FillDirection.Vertical
+    l.Parent = o
+    return l
+end
+
+local function LigarCanvas(scroll, layout, extra)
+    local function atualizar()
+        scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + (extra or SP.sm))
+    end
+    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(atualizar)
+    task.defer(atualizar)
+end
+
+local function Sep(parent, y)
+    return Inst("Frame", {
+        Position = UDim2.new(0, 0, 0, y), Size = UDim2.new(1, 0, 0, 1),
+        BackgroundColor3 = C.borderSoft, BorderSizePixel = 0
+    }, parent)
+end
+
+-- SECAO 5: NOTIFICACOES E DIALOGO
+local ScreenGui = Inst("ScreenGui", {
+    Name = "CapivaraHub", ResetOnSpawn = false,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true
+})
+ScreenGui.Parent = (gethui and gethui()) or CoreGui
+env.CapivaraHubWindow = ScreenGui
+
+local toastHolder = Inst("Frame", {
+    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -SP.lg, 0, SP.lg),
+    Size = UDim2.new(0, 288, 1, -SP.xl * 2), BackgroundTransparency = 1
+}, ScreenGui)
+Lista(toastHolder, SP.sm)
+
+local function Notificar(titulo, conteudo, duracao)
+    local card = Inst("Frame", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundColor3 = C.surface2, BackgroundTransparency = 1
+    }, toastHolder)
+    Corner(card, 10)
+    local st = Stroke(card, C.border)
+    st.Transparency = 1
+    Pad(card, SP.md)
+    Lista(card, 2)
+    local tl = Inst("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1,
+        Font = Enum.Font.GothamMedium, TextSize = T.item, Text = titulo, TextColor3 = C.text,
+        TextXAlignment = Enum.TextXAlignment.Left, TextTransparency = 1
+    }, card)
+    local cl = Inst("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+        Font = Enum.Font.Gotham, TextSize = T.small, Text = conteudo or "", TextColor3 = C.sub,
+        TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextTransparency = 1
+    }, card)
+    Tween(card, FAST, { BackgroundTransparency = 0 })
+    Tween(st, FAST, { Transparency = 0 })
+    Tween(tl, FAST, { TextTransparency = 0 })
+    Tween(cl, FAST, { TextTransparency = 0 })
+    task.delay(duracao or 3, function()
+        Tween(card, FAST, { BackgroundTransparency = 1 })
+        Tween(st, FAST, { Transparency = 1 })
+        Tween(tl, FAST, { TextTransparency = 1 })
+        Tween(cl, FAST, { TextTransparency = 1 })
+        task.delay(0.18, function() pcall(function() card:Destroy() end) end)
+    end)
+end
+
+local function MostrarDialogo(titulo, conteudo, aoSim, aoNao)
+    local overlay = Inst("TextButton", {
+        Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 50
+    }, ScreenGui)
+    local card = Inst("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 6),
+        Size = UDim2.new(0, 330, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundColor3 = C.surface2, BackgroundTransparency = 1, ZIndex = 51
+    }, overlay)
+    Corner(card, 12)
+    local st = Stroke(card, C.border)
+    st.Transparency = 1
+    Pad(card, SP.lg)
+    Lista(card, SP.md)
+    local tl = Inst("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1,
+        Font = Enum.Font.GothamMedium, TextSize = T.game, Text = titulo, TextColor3 = C.text,
+        TextXAlignment = Enum.TextXAlignment.Left, TextTransparency = 1
+    }, card)
+    local cl = Inst("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+        Font = Enum.Font.Gotham, TextSize = T.body, Text = conteudo, TextColor3 = C.sub,
+        TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextTransparency = 1
+    }, card)
+    local row = Inst("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1 }, card)
+    Lista(row, SP.sm, Enum.FillDirection.Horizontal)
+    local function botao(txt, cor, cb)
+        local b = Inst("TextButton", {
+            Size = UDim2.new(0.5, -SP.xs, 1, 0), BackgroundColor3 = cor, BackgroundTransparency = 1,
+            Font = Enum.Font.GothamMedium, TextSize = T.item, Text = txt, TextColor3 = C.text,
+            AutoButtonColor = false, TextTransparency = 1
+        }, row)
+        Corner(b, 8)
+        b.MouseEnter:Connect(function() Tween(b, FAST, { BackgroundTransparency = 0.35 }) end)
+        b.MouseLeave:Connect(function() Tween(b, FAST, { BackgroundTransparency = 0.55 }) end)
+        b.MouseButton1Click:Connect(cb)
+        return b
+    end
+    local bSim = botao("SIM", C.accent, function()
+        pcall(function() overlay:Destroy() end)
+        if aoSim then aoSim() end
+    end)
+    local bNao = botao("NÃO", C.surface3, function()
+        pcall(function() overlay:Destroy() end)
+        if aoNao then aoNao() end
+    end)
+    Tween(card, EASE, { BackgroundTransparency = 0, Position = UDim2.new(0.5, 0, 0.5, 0) })
+    Tween(st, EASE, { Transparency = 0 })
+    Tween(tl, EASE, { TextTransparency = 0 })
+    Tween(cl, EASE, { TextTransparency = 0 })
+    Tween(bSim, FAST, { BackgroundTransparency = 0.55, TextTransparency = 0 })
+    Tween(bNao, FAST, { BackgroundTransparency = 0.55, TextTransparency = 0 })
+end
+
+-- SECAO 6: TELEPORTE (logica preservada)
+local REMOTE_TELEPORT_NAME = "CapivaraTeleportRequest"
+local teleportPendente = false
+
+local function ObterRemoteTeleporte()
+    local r = ReplicatedStorage:FindFirstChild(REMOTE_TELEPORT_NAME)
+    if r and r:IsA("RemoteEvent") then return r end
+    return nil
+end
+
+TeleportService.TeleportInitFailed:Connect(function(jogador, resultado, mensagem)
+    if jogador ~= Player then return end
+    teleportPendente = false
+    Notificar("Falha no teleporte", tostring(mensagem) .. " (" .. tostring(resultado) .. ")", 4)
+end)
+
+local function SolicitarTeleporte(targetPlaceId)
+    if not targetPlaceId or targetPlaceId == 0 then return end
+    if game.PlaceId == targetPlaceId then
+        Notificar("Você já está aqui", "Nenhum teleporte necessário.", 2)
+        return
+    end
+    if teleportPendente then return end
+
+    MostrarDialogo(
+        "Jogo incompatível",
+        string.format("Este script requer outro jogo.\nLocal atual: %d\nDestino: %d\n\nDeseja ser teleportado?", game.PlaceId, targetPlaceId),
+        function()
+            if game.PlaceId == targetPlaceId or teleportPendente then return end
+            teleportPendente = true
+            local remote = ObterRemoteTeleporte()
+            if remote then
+                remote:FireServer(targetPlaceId)
+                task.delay(15, function()
+                    if teleportPendente then
+                        teleportPendente = false
+                        Notificar("Sem resposta", "O servidor não confirmou o teleporte.", 4)
+                    end
+                end)
+            else
+                local ok, err = pcall(function() TeleportService:TeleportAsync(targetPlaceId, { Player }) end)
+                if not ok then
+                    teleportPendente = false
+                    Notificar("Erro de Teleporte", tostring(err), 4)
+                else
+                    task.delay(15, function() teleportPendente = false end)
+                end
+            end
+        end,
+        function() teleportPendente = false end
+    )
+end
+
+-- SECAO 7: COMPATIBILIDADE + EXECUCAO DE SCRIPTS
+-- Le game.PlaceId E game.GameId no momento da chamada, normaliza tipos e aceita
+-- qualquer id cadastrado (place OU universe). Nao inventa nem altera ids.
+local function VerificarCompatibilidade(nomeJogo)
+    local info = MapaJogos[nomeJogo]
+    assert(info, "Jogo não encontrado no MapaJogos: " .. tostring(nomeJogo))
+    assert(type(info.placeIds) == "table", "placeIds inválido: " .. tostring(nomeJogo))
+    local currentPlaceId = tonumber(game.PlaceId)
+    for _, id in ipairs(info.placeIds) do
+        if tonumber(id) == currentPlaceId then
+            return true, tonumber(info.defaultId) or tonumber(id)
+        end
+    end
+    return false, tonumber(info.defaultId) or 0
+end
+
+local ultimasExecucoes = {}
+
+local function ExecutarScript(dadosScript, nomeJogo)
+    local now = tick()
+    local key = (dadosScript.nome or "Script") .. "|" .. tostring(dadosScript.url)
+    if ultimasExecucoes[key] and (now - ultimasExecucoes[key]) < 3 then return end
+    ultimasExecucoes[key] = now
+
+    local compativel, targetPlaceId = VerificarCompatibilidade(nomeJogo)
+    if not compativel then
+        SolicitarTeleporte(targetPlaceId)
+        return
+    end
+
+    local thread = task.spawn(function()
+        local codigo = dadosScript.codigo
+        if not codigo and dadosScript.url then
+            local okGet, res = pcall(function() return game:HttpGet(dadosScript.url) end)
+            if okGet then codigo = res end
+        end
+        if codigo and codigo ~= "" then
+            local fn, err = loadstring(codigo)
+            if fn then
+                local okExec, errExec = pcall(fn)
+                if okExec then
+                    Notificar("Sucesso", (dadosScript.nome or "Script") .. " executado!", 2)
+                else
+                    Notificar("Erro de Execução", tostring(errExec), 3)
+                end
+            else
+                Notificar("Erro de Compilação", tostring(err), 3)
+            end
+        end
+    end)
+    RegistrarThread(thread)
+end
+
+-- SECAO 8: FERRAMENTAS (estado central + liga/desliga confiavel)
+local cursorOriginalMouseIconEnabled = nil
+local function AplicarRestaurarCursor(ativo)
+    ativo = ativo and true or false
+    local conn = env.CapivaraToolConns.Cursor
+    if conn then conn:Disconnect(); RemoverConexao(conn); env.CapivaraToolConns.Cursor = nil end
+    if ativo then
+        if not Ferramentas.RestaurarCursor then cursorOriginalMouseIconEnabled = UserInputService.MouseIconEnabled end
+        Ferramentas.RestaurarCursor = true
+        UserInputService.MouseIconEnabled = true
+        conn = RunService.RenderStepped:Connect(function() UserInputService.MouseIconEnabled = true end)
+        env.CapivaraToolConns.Cursor = conn
+        RegistrarConexao(conn)
+    else
+        Ferramentas.RestaurarCursor = false
+        if cursorOriginalMouseIconEnabled ~= nil then UserInputService.MouseIconEnabled = cursorOriginalMouseIconEnabled end
+        cursorOriginalMouseIconEnabled = nil
+    end
+end
+local function AplicarInstantInteract(ativo)
+    ativo = ativo and true or false
+    local conn = env.CapivaraToolConns.Instant
+    if conn then conn:Disconnect(); RemoverConexao(conn); env.CapivaraToolConns.Instant = nil end
+    Ferramentas.InstantInteract = ativo
+    if ativo then
+        conn = ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
+            if Ferramentas.InstantInteract then pcall(fireproximityprompt, prompt) end
+        end)
+        env.CapivaraToolConns.Instant = conn
+        RegistrarConexao(conn)
+    end
+end
+
+-- SECAO 9: CONFIGURACAO (logica preservada)
+local BASE_FOLDER = "CapivaraHub"
+local CONFIG_FOLDER = BASE_FOLDER .. "/Save config"
+local ARQ_AUTOLOAD = CONFIG_FOLDER .. "/_autoload.json"
+local RegisteredElements = {}
+
+local function GarantirPastas()
+    if isfolder and makefolder then
+        if not isfolder(BASE_FOLDER) then pcall(makefolder, BASE_FOLDER) end
+        if not isfolder(CONFIG_FOLDER) then pcall(makefolder, CONFIG_FOLDER) end
+    end
+end
+GarantirPastas()
+
+local function ListarConfigsSalvas()
+    GarantirPastas()
+    local lista = {}
+    if listfiles and isfolder and isfolder(CONFIG_FOLDER) then
+        local ok, arquivos = pcall(listfiles, CONFIG_FOLDER)
+        if ok and type(arquivos) == "table" then
+            for _, caminho in ipairs(arquivos) do
+                if caminho:sub(-5) == ".json" and not caminho:find("_autoload.json") then
+                    local nome = caminho:match("([^/\\]+)%.json$")
+                    if nome then table.insert(lista, nome) end
+                end
+            end
+        end
+    end
+    if #lista == 0 then table.insert(lista, "Nenhuma") end
+    table.sort(lista)
+    return lista
+end
+
+local function RegistrarElemento(flag, get, set)
+    RegisteredElements[flag] = { get = get, set = set }
+end
+
+local function SaveConfig(configName)
+    if not configName or configName == "" or configName == "Nenhuma" then return false end
+    GarantirPastas()
+    local elementsData = {}
+    for flag, item in pairs(RegisteredElements) do
+        local ok, val = pcall(item.get)
+        if ok and val ~= nil then elementsData[flag] = val end
+    end
+    local okEncode, encoded = pcall(function()
+        return HttpService:JSONEncode({ ["__version"] = 1, ["__elements"] = elementsData })
+    end)
+    if not okEncode or not encoded then return false end
+    return pcall(function() writefile(CONFIG_FOLDER .. "/" .. configName .. ".json", encoded) end)
+end
+
+local function LoadConfig(configName)
+    if not configName or configName == "" or configName == "Nenhuma" then
+        Notificar("Aviso", "Selecione uma configuração válida.", 2)
+        return false
+    end
+    local filePath = CONFIG_FOLDER .. "/" .. configName .. ".json"
+    if not isfile or not isfile(filePath) then
+        Notificar("Erro", "Arquivo não encontrado.", 2)
+        return false
+    end
+    local okRead, content = pcall(readfile, filePath)
+    if not okRead or not content then return false end
+    local okDecode, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+    if not okDecode or type(decoded) ~= "table" then return false end
+    local elementsData = decoded["__elements"] or decoded
+    if type(elementsData) ~= "table" then return false end
+    if elementsData["ApexFree"] == true and elementsData["ApexPremium"] == true then
+        elementsData["ApexPremium"] = false
+    end
+    for flag, value in pairs(elementsData) do
+        if flag:sub(1, 2) ~= "__" then
+            local item = RegisteredElements[flag]
+            if item and type(item.set) == "function" then pcall(item.set, value) end
+        end
+    end
+    Notificar("Carregado!", "Configuração '" .. configName .. "' aplicada.", 2)
+    return true
+end
+
+-- SECAO 10: COMPONENTES
+local function CriarBotao(parent, texto, descricao, aoClicar)
+    local altura = descricao and 50 or 38
+    local b = Inst("TextButton", {
+        Size = UDim2.new(1, 0, 0, altura), BackgroundColor3 = C.surface2,
+        BackgroundTransparency = 0.15, Text = "", AutoButtonColor = false
+    }, parent)
+    Corner(b, 9)
+    local st = Stroke(b, C.borderSoft)
+    Inst("TextLabel", {
+        Position = UDim2.new(0, SP.md, 0, descricao and 9 or 0),
+        Size = UDim2.new(1, -44, 0, descricao and 16 or altura), BackgroundTransparency = 1,
+        Font = Enum.Font.GothamMedium, TextSize = T.item, Text = texto, TextColor3 = C.text,
+        TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd
+    }, b)
+    if descricao then
+        Inst("TextLabel", {
+            Position = UDim2.new(0, SP.md, 0, 26), Size = UDim2.new(1, -44, 0, 15), BackgroundTransparency = 1,
+            Font = Enum.Font.Gotham, TextSize = T.small, Text = descricao, TextColor3 = C.muted,
+            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd
+        }, b)
+    end
+    Inst("TextLabel", {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -SP.md, 0.5, 0),
+        Size = UDim2.new(0, 16, 0, 16), BackgroundTransparency = 1,
+        Font = Enum.Font.GothamBold, TextSize = 13, Text = "▶", TextColor3 = C.accent
+    }, b)
+    b.MouseEnter:Connect(function()
+        Tween(b, FAST, { BackgroundTransparency = 0, BackgroundColor3 = C.surface3 })
+        Tween(st, FAST, { Color = C.border })
+    end)
+    b.MouseLeave:Connect(function()
+        Tween(b, FAST, { BackgroundTransparency = 0.15, BackgroundColor3 = C.surface2 })
+        Tween(st, FAST, { Color = C.borderSoft })
+    end)
+    b.MouseButton1Click:Connect(function() if aoClicar then aoClicar() end end)
+    return b
+end
+
+local function CriarToggle(parent, texto, descricao, valorInicial, aoMudar)
+    local state = valorInicial and true or false
+    local row = Inst("TextButton", {
+        Size = UDim2.new(1, 0, 0, descricao and 50 or 40),
+        BackgroundColor3 = C.surface2, BackgroundTransparency = 0.15, Text = "", AutoButtonColor = false
+    }, parent)
+    Corner(row, 9)
+    local st = Stroke(row, C.borderSoft)
+    Inst("TextLabel", {
+        Position = UDim2.new(0, SP.md, 0, descricao and 9 or 0),
+        Size = UDim2.new(1, -64, 0, descricao and 16 or 40), BackgroundTransparency = 1,
+        Font = Enum.Font.GothamMedium, TextSize = T.item, Text = texto, TextColor3 = C.text,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, row)
+    if descricao then
+        Inst("TextLabel", {
+            Position = UDim2.new(0, SP.md, 0, 26), Size = UDim2.new(1, -64, 0, 15), BackgroundTransparency = 1,
+            Font = Enum.Font.Gotham, TextSize = T.small, Text = descricao, TextColor3 = C.muted,
+            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd
+        }, row)
+    end
+    local track = Inst("Frame", {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -SP.md, 0.5, 0),
+        Size = UDim2.new(0, 38, 0, 20), BackgroundColor3 = C.surface, BorderSizePixel = 0
+    }, row)
+    Corner(track, 10)
+    local knob = Inst("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0),
+        Size = UDim2.new(0, 14, 0, 14), BackgroundColor3 = C.muted, BorderSizePixel = 0
+    }, track)
+    Corner(knob, 7)
+
+    local function render(animar)
+        local ti = animar and FAST or NONE
+        Tween(knob, ti, { Position = UDim2.new(0, state and 21 or 3, 0.5, 0), BackgroundColor3 = state and C.accent or C.muted })
+        Tween(track, ti, { BackgroundColor3 = state and C.accentSoft or C.surface })
+    end
+
+    local function setValue(v, aplicar)
+        state = v and true or false
+        render(true)
+        if aplicar and aoMudar then aoMudar(state) end
+    end
+
+    row.MouseEnter:Connect(function()
+        Tween(row, FAST, { BackgroundTransparency = 0 })
+        Tween(st, FAST, { Color = C.border })
+    end)
+    row.MouseLeave:Connect(function()
+        Tween(row, FAST, { BackgroundTransparency = 0.15 })
+        Tween(st, FAST, { Color = C.borderSoft })
+    end)
+    row.MouseButton1Click:Connect(function()
+        state = not state
+        render(true)
+        if aoMudar then aoMudar(state) end
+    end)
+
+    render(false)
+    return { SetValue = setValue, Get = function() return state end }
+end
+
+-- SECAO 11: JANELA, SIDEBAR E PERFIL
+local Janela = Inst("Frame", {
+    AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+    Size = UDim2.new(0, 760, 0, 480), BackgroundColor3 = C.bg,
+    BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true
+}, ScreenGui)
+Corner(Janela, 14)
+local janelaStroke = Stroke(Janela, C.border)
+janelaStroke.Transparency = 1
+
+local Sidebar = Inst("Frame", {
+    Size = UDim2.new(0, 186, 1, 0), BackgroundColor3 = C.sidebar,
+    BackgroundTransparency = 1, BorderSizePixel = 0
+}, Janela)
+local sidebarSep = Inst("Frame", {
+    Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0),
+    BackgroundColor3 = C.borderSoft, BackgroundTransparency = 1, BorderSizePixel = 0
+}, Sidebar)
+
+local Logo = Inst("Frame", { Size = UDim2.new(1, 0, 0, 54), BackgroundTransparency = 1 }, Sidebar)
+Inst("TextLabel", {
+    Position = UDim2.new(0, SP.lg, 0, 18), Size = UDim2.new(1, -SP.lg * 2, 0, 16), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = 13, Text = "CAPIVARA", TextColor3 = C.text,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Logo)
+Inst("TextLabel", {
+    Position = UDim2.new(0, SP.lg, 0, 34), Size = UDim2.new(1, -SP.lg * 2, 0, 13), BackgroundTransparency = 1,
+    Font = Enum.Font.Gotham, TextSize = T.micro, Text = "HUB  ·  v8.2.0", TextColor3 = C.muted,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Logo)
+
+local NavHolder = Inst("Frame", {
+    Position = UDim2.new(0, SP.sm, 0, 66), Size = UDim2.new(1, -SP.lg, 1, -190), BackgroundTransparency = 1
+}, Sidebar)
+Lista(NavHolder, 3)
+
+local Perfil = Inst("Frame", {
+    AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, SP.sm, 1, -SP.sm),
+    Size = UDim2.new(1, -SP.lg, 0, 56), BackgroundColor3 = C.surface,
+    BackgroundTransparency = 1, BorderSizePixel = 0
+}, Sidebar)
+Corner(Perfil, 10)
+local perfilStroke = Stroke(Perfil, C.borderSoft)
+perfilStroke.Transparency = 1
+local avatar = Inst("ImageLabel", {
+    Position = UDim2.new(0, SP.md, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+    Size = UDim2.new(0, 34, 0, 34), BackgroundColor3 = C.surface2,
+    Image = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. tostring(Player.UserId) .. "&width=420&height=420&format=png"
+}, Perfil)
+Corner(avatar, 17)
+Inst("TextLabel", {
+    Position = UDim2.new(0, 56, 0, 13), Size = UDim2.new(1, -64, 0, 15), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = T.body, Text = Player.DisplayName or Player.Name,
+    TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd
+}, Perfil)
+Inst("TextLabel", {
+    Position = UDim2.new(0, 56, 0, 30), Size = UDim2.new(1, -64, 0, 13), BackgroundTransparency = 1,
+    Font = Enum.Font.Gotham, TextSize = T.micro, Text = "@" .. Player.Name,
+    TextColor3 = C.muted, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd
+}, Perfil)
+
+-- SECAO 12: AREA DE CONTEUDO
+local Conteudo = Inst("Frame", {
+    Position = UDim2.new(0, 186, 0, 0), Size = UDim2.new(1, -186, 1, 0), BackgroundTransparency = 1
+}, Janela)
+
+local Header = Inst("Frame", { Size = UDim2.new(1, 0, 0, 54), BackgroundTransparency = 1 }, Conteudo)
+local TituloTela = Inst("TextLabel", {
+    Position = UDim2.new(0, SP.xl, 0, 18), Size = UDim2.new(0, 320, 0, 20), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = T.title, Text = "Home", TextColor3 = C.text,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Header)
+local Busca = Inst("TextBox", {
+    AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -SP.xl, 0.5, 0),
+    Size = UDim2.new(0, 176, 0, 30), BackgroundColor3 = C.surface,
+    Font = Enum.Font.Gotham, TextSize = T.body, Text = "", PlaceholderText = "Pesquisar",
+    PlaceholderColor3 = C.muted, TextColor3 = C.text, ClearTextOnFocus = false,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Header)
+Corner(Busca, 8)
+Stroke(Busca, C.borderSoft)
+Pad(Busca, SP.md, 0, SP.md, 0)
+Busca.Focused:Connect(function() Tween(Busca, FAST, { BackgroundColor3 = C.surface2 }) end)
+Busca.FocusLost:Connect(function() Tween(Busca, FAST, { BackgroundColor3 = C.surface }) end)
+local headerSep = Sep(Conteudo, 54)
+headerSep.BackgroundTransparency = 1
+
+local Body = Inst("Frame", {
+    Position = UDim2.new(0, 0, 0, 54), Size = UDim2.new(1, 0, 1, -54),
+    BackgroundTransparency = 1, ClipsDescendants = true
+}, Conteudo)
+
+-- SECAO 13: NAVEGACAO
+local NavItens = {}
+local Telas = {}
+local MostrarTela
+local MostrarListaJogos
+local IrParaJogo
+
+local function CriarNavItem(id, texto)
+    local b = Inst("TextButton", {
+        Size = UDim2.new(1, 0, 0, 32), BackgroundColor3 = C.surface2,
+        BackgroundTransparency = 1, Text = "", AutoButtonColor = false
+    }, NavHolder)
+    Corner(b, 7)
+    local bar = Inst("Frame", {
+        Position = UDim2.new(0, 0, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+        Size = UDim2.new(0, 2, 0, 0), BackgroundColor3 = C.accent, BorderSizePixel = 0
+    }, b)
+    Corner(bar, 1)
+    local lbl = Inst("TextLabel", {
+        Position = UDim2.new(0, SP.lg, 0, 0), Size = UDim2.new(1, -SP.xl, 1, 0), BackgroundTransparency = 1,
+        Font = Enum.Font.Gotham, TextSize = T.item, Text = texto, TextColor3 = C.muted,
+        TextXAlignment = Enum.TextXAlignment.Left
+    }, b)
+    b.MouseEnter:Connect(function()
+        if Estado.tela ~= id then Tween(b, FAST, { BackgroundTransparency = 0.55 }) end
+    end)
+    b.MouseLeave:Connect(function()
+        if Estado.tela ~= id then Tween(b, FAST, { BackgroundTransparency = 1 }) end
+    end)
+    b.MouseButton1Click:Connect(function() if MostrarTela then MostrarTela(id) end end)
+    NavItens[id] = { botao = b, barra = bar, label = lbl }
+    return b
+end
+
+local function AtualizarNav()
+    for id, item in pairs(NavItens) do
+        local ativo = (Estado.tela == id)
+        Tween(item.botao, FAST, { BackgroundTransparency = ativo and 0.5 or 1 })
+        Tween(item.barra, FAST, { Size = UDim2.new(0, 2, 0, ativo and 14 or 0) })
+        Tween(item.label, FAST, { TextColor3 = ativo and C.text or C.muted })
+        item.label.Font = ativo and Enum.Font.GothamMedium or Enum.Font.Gotham
+    end
+end
+
+local function CriarTela(id, titulo, mostraBusca)
+    local f = Inst("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Visible = false }, Body)
+    Telas[id] = { frame = f, titulo = titulo, mostraBusca = mostraBusca }
+    return f
+end
+
+MostrarTela = function(id)
+    if not Telas[id] then return end
+    Estado.tela = id
+    for tid, t in pairs(Telas) do
+        if tid == id then
+            t.frame.Visible = true
+            t.frame.Position = UDim2.new(0, 0, 0, 8)
+            Tween(t.frame, EASE, { Position = UDim2.new(0, 0, 0, 0) })
+        else
+            t.frame.Visible = false
+        end
+    end
+    TituloTela.Text = Telas[id].titulo
+    Busca.Visible = Telas[id].mostraBusca and true or false
+    Busca.Text = ""
+    Estado.busca = ""
+    AtualizarNav()
+    if id == "Jogos" then
+        Estado.jogoSelecionado = nil
+        if MostrarListaJogos then MostrarListaJogos() end
+    end
+end
+
+CriarNavItem("Home", "Home")
+CriarNavItem("Jogos", "Jogos / Scripts")
+CriarNavItem("Ferramentas", "Ferramentas")
+CriarNavItem("Misc", "Miscelânea")
+CriarNavItem("Config", "Configurações")
+
+-- SECAO 14: HOME
+local HomeFrame = CriarTela("Home", "Home", false)
+local homeBox = Inst("Frame", {
+    Position = UDim2.new(0, SP.xl, 0, SP.xs), Size = UDim2.new(1, -SP.xl * 2, 0, 84),
+    BackgroundColor3 = C.surface, BackgroundTransparency = 0
+}, HomeFrame)
+Corner(homeBox, 12)
+Stroke(homeBox, C.borderSoft)
+Inst("TextLabel", {
+    Position = UDim2.new(0, SP.lg, 0, SP.lg), Size = UDim2.new(1, -SP.xl, 0, 20), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = T.title, Text = "Capivara HUB", TextColor3 = C.text,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, homeBox)
+Inst("TextLabel", {
+    Position = UDim2.new(0, SP.lg, 0, 40), Size = UDim2.new(1, -SP.xl, 0, 16), BackgroundTransparency = 1,
+    Font = Enum.Font.Gotham, TextSize = T.body, Text = "Hub multifuncional para Roblox com suporte a múltiplos jogos e ferramentas.",
+    TextColor3 = C.sub, TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true
+}, homeBox)
+Inst("TextLabel", {
+    Position = UDim2.new(0, SP.lg, 0, 60), Size = UDim2.new(1, -SP.xl, 0, 13), BackgroundTransparency = 1,
+    Font = Enum.Font.Gotham, TextSize = T.micro, Text = "Versão v8.2.0", TextColor3 = C.muted,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, homeBox)
+
+local homePerfil = Inst("Frame", {
+    Position = UDim2.new(0, SP.xl, 0, 100), Size = UDim2.new(1, -SP.xl * 2, 0, 66),
+    BackgroundColor3 = C.surface, BackgroundTransparency = 0
+}, HomeFrame)
+Corner(homePerfil, 12)
+Stroke(homePerfil, C.borderSoft)
+local homeAvatar = Inst("ImageLabel", {
+    Position = UDim2.new(0, SP.lg, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+    Size = UDim2.new(0, 40, 0, 40), BackgroundColor3 = C.surface2,
+    Image = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. tostring(Player.UserId) .. "&width=420&height=420&format=png"
+}, homePerfil)
+Corner(homeAvatar, 20)
+Inst("TextLabel", {
+    Position = UDim2.new(0, 68, 0, 18), Size = UDim2.new(1, -80, 0, 16), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = T.item, Text = Player.DisplayName or Player.Name,
+    TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left
+}, homePerfil)
+Inst("TextLabel", {
+    Position = UDim2.new(0, 68, 0, 36), Size = UDim2.new(1, -80, 0, 14), BackgroundTransparency = 1,
+    Font = Enum.Font.Gotham, TextSize = T.small, Text = "Username: @" .. Player.Name,
+    TextColor3 = C.muted, TextXAlignment = Enum.TextXAlignment.Left
+}, homePerfil)
+
+-- SECAO 15: JOGOS
+local JogosFrame = CriarTela("Jogos", "Jogos", true)
+local Palco = Inst("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, ClipsDescendants = true }, JogosFrame)
+
+local PainelLista = Inst("Frame", {
+    Position = UDim2.new(0, 0, 0, 0), Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1
+}, Palco)
+
+local contadorLabel = Inst("TextLabel", {
+    Position = UDim2.new(0, SP.xl, 0, SP.xs), Size = UDim2.new(1, -SP.xl * 2, 0, 13), BackgroundTransparency = 1,
+    Font = Enum.Font.Gotham, TextSize = T.micro, Text = "", TextColor3 = C.muted,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, PainelLista)
+
+local listaHolder = Inst("Frame", {
+    Position = UDim2.new(0, SP.xl, 0, SP.xs + 18), Size = UDim2.new(1, -SP.xl * 2, 1, -SP.sm - 18),
+    BackgroundTransparency = 1
+}, PainelLista)
+Lista(listaHolder, 5)
+
+local PainelDetalhe = Inst("Frame", {
+    Position = UDim2.new(1, 0, 0, 0), Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1
+}, Palco)
+
+local Lateral = Inst("Frame", {
+    Position = UDim2.new(0, SP.xl, 0, SP.xs), Size = UDim2.new(0, 196, 1, -SP.sm),
+    BackgroundColor3 = C.surface, BackgroundTransparency = 0
+}, PainelDetalhe)
+Corner(Lateral, 12)
+Stroke(Lateral, C.borderSoft)
+local lateralAccent = Inst("Frame", {
+    Position = UDim2.new(0, 0, 0, SP.lg), Size = UDim2.new(0, 2, 0, 16),
+    BackgroundColor3 = C.accent, BorderSizePixel = 0
+}, Lateral)
+Corner(lateralAccent, 1)
+Inst("TextLabel", {
+    Position = UDim2.new(0, SP.md, 0, SP.lg), Size = UDim2.new(1, -SP.md * 2, 0, 13), BackgroundTransparency = 1,
+    Font = Enum.Font.Gotham, TextSize = T.micro, Text = "JOGO SELECIONADO", TextColor3 = C.muted,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, Lateral)
+local LateralNome = Inst("TextLabel", {
+    Position = UDim2.new(0, SP.md, 0, 40), Size = UDim2.new(1, -SP.md * 2, 0, 40), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = T.game, Text = "", TextColor3 = C.text,
+    TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top
+}, Lateral)
+local LateralDesc = Inst("TextLabel", {
+    Position = UDim2.new(0, SP.md, 0, 86), Size = UDim2.new(1, -SP.md * 2, 0, 56), BackgroundTransparency = 1,
+    Font = Enum.Font.Gotham, TextSize = T.small, Text = "", TextColor3 = C.muted,
+    TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top
+}, Lateral)
+local VoltarBtn = Inst("TextButton", {
+    Position = UDim2.new(0, SP.md, 1, -SP.md - 30), Size = UDim2.new(1, -SP.md * 2, 0, 30),
+    BackgroundColor3 = C.surface2, BackgroundTransparency = 0.2, Text = "", AutoButtonColor = false
+}, Lateral)
+Corner(VoltarBtn, 8)
+local voltarStroke = Stroke(VoltarBtn, C.borderSoft)
+Inst("TextLabel", {
+    Position = UDim2.new(0, SP.md, 0, 0), Size = UDim2.new(1, -SP.md, 1, 0), BackgroundTransparency = 1,
+    Font = Enum.Font.GothamMedium, TextSize = T.body, Text = "←  Voltar", TextColor3 = C.sub,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, VoltarBtn)
+VoltarBtn.MouseEnter:Connect(function()
+    Tween(VoltarBtn, FAST, { BackgroundTransparency = 0 })
+    Tween(voltarStroke, FAST, { Color = C.border })
+end)
+VoltarBtn.MouseLeave:Connect(function()
+    Tween(VoltarBtn, FAST, { BackgroundTransparency = 0.2 })
+    Tween(voltarStroke, FAST, { Color = C.borderSoft })
+end)
+
+local scriptScroll = Inst("ScrollingFrame", {
+    Position = UDim2.new(0, 236, 0, SP.xs), Size = UDim2.new(1, -236 - SP.xl, 1, -SP.sm),
+    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+    ScrollBarImageColor3 = C.border, CanvasSize = UDim2.new(0, 0, 0, 0)
+}, PainelDetalhe)
+local scriptLayout = Lista(scriptScroll, SP.sm)
+LigarCanvas(scriptScroll, scriptLayout)
+
+local function RenderListaJogos()
+    for _, ch in ipairs(listaHolder:GetChildren()) do
+        if not ch:IsA("UIListLayout") then ch:Destroy() end
+    end
+    local filtro = Estado.busca:lower()
+    local criados = 0
+    for _, jogo in ipairs(ListaJogos) do
+        if filtro == "" or jogo.nome:lower():find(filtro, 1, true) then
+            criados = criados + 1
+            local item = Inst("TextButton", {
+                Size = UDim2.new(1, 0, 0, 48), BackgroundColor3 = C.surface,
+                BackgroundTransparency = 0.15, Text = "", AutoButtonColor = false
+            }, listaHolder)
+            Corner(item, 10)
+            local st = Stroke(item, C.borderSoft)
+            local accent = Inst("Frame", {
+                Position = UDim2.new(0, 0, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+                Size = UDim2.new(0, 2, 0, 0), BackgroundColor3 = C.accent, BorderSizePixel = 0
+            }, item)
+            Corner(accent, 1)
+            Inst("TextLabel", {
+                Position = UDim2.new(0, SP.lg, 0, 8), Size = UDim2.new(1, -96, 0, 16), BackgroundTransparency = 1,
+                Font = Enum.Font.GothamMedium, TextSize = T.item, Text = jogo.nome, TextColor3 = C.text,
+                TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd
+            }, item)
+            Inst("TextLabel", {
+                Position = UDim2.new(0, SP.lg, 0, 26), Size = UDim2.new(1, -96, 0, 14), BackgroundTransparency = 1,
+                Font = Enum.Font.Gotham, TextSize = T.small, Text = jogo.desc or "", TextColor3 = C.muted,
+                TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd
+            }, item)
+            Inst("TextLabel", {
+                AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -SP.lg, 0.5, 0),
+                Size = UDim2.new(0, 64, 0, 14), BackgroundTransparency = 1,
+                Font = Enum.Font.Gotham, TextSize = T.micro, Text = #jogo.scripts .. " script(s)",
+                TextColor3 = C.muted, TextXAlignment = Enum.TextXAlignment.Right
+            }, item)
+            item.MouseEnter:Connect(function()
+                Tween(item, FAST, { BackgroundTransparency = 0, BackgroundColor3 = C.surface2 })
+                Tween(st, FAST, { Color = C.border })
+                Tween(accent, FAST, { Size = UDim2.new(0, 2, 0, 18) })
+            end)
+            item.MouseLeave:Connect(function()
+                Tween(item, FAST, { BackgroundTransparency = 0.15, BackgroundColor3 = C.surface })
+                Tween(st, FAST, { Color = C.borderSoft })
+                Tween(accent, FAST, { Size = UDim2.new(0, 2, 0, 0) })
+            end)
+            item.MouseButton1Click:Connect(function()
+                if IrParaJogo then IrParaJogo(jogo) end
+            end)
+        end
+    end
+    contadorLabel.Text = criados .. " jogo(s) disponível(is)"
+    Log(string.format("RenderListaJogos -> tabela: %d | itens criados: %d", #ListaJogos, criados))
+end
+
+local function RenderScripts(jogo)
+    for _, ch in ipairs(scriptScroll:GetChildren()) do
+        if not ch:IsA("UIListLayout") then ch:Destroy() end
+    end
+    local filtro = Estado.busca:lower()
+    local ordem = 0
+    for _, sc in ipairs(jogo.scripts) do
+        if filtro == "" or sc.nome:lower():find(filtro, 1, true) or (sc.desc and sc.desc:lower():find(filtro, 1, true)) then
+            ordem = ordem + 1
+            if sc.isApexHard then
+                local box = Inst("Frame", {
+                    Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+                    BackgroundTransparency = 1, LayoutOrder = ordem
+                }, scriptScroll)
+                Lista(box, SP.sm)
+                local apexVersion = "None"
+                local updating = false
+                local tFree, tPrem
+
+                local function Atualizar(v, sync)
+                    if updating then return end
+                    updating = true
+                    apexVersion = v
+                    if sync then
+                        if v == "Free" and tPrem then tPrem.SetValue(false, false) end
+                        if v == "Premium" and tFree then tFree.SetValue(false, false) end
+                    end
+                    updating = false
+                end
+
+                tFree = CriarToggle(box, "Versão Free", nil, false, function(state)
+                    if state then
+                        Atualizar("Free", true)
+                    elseif apexVersion == "Free" and not updating then
+                        Atualizar("None", false)
+                    end
+                end)
+                tPrem = CriarToggle(box, "Versão Premium", nil, false, function(state)
+                    if state then
+                        Atualizar("Premium", true)
+                    elseif apexVersion == "Premium" and not updating then
+                        Atualizar("None", false)
+                    end
+                end)
+
+                RegistrarElemento("ApexFree",
+                    function() return apexVersion == "Free" end,
+                    function(val)
+                        if val then
+                            Atualizar("Free", true)
+                            tFree.SetValue(true, false)
+                        else
+                            if apexVersion == "Free" then Atualizar("None", false) end
+                            tFree.SetValue(false, false)
+                        end
+                    end)
+                RegistrarElemento("ApexPremium",
+                    function() return apexVersion == "Premium" end,
+                    function(val)
+                        if val then
+                            Atualizar("Premium", true)
+                            tPrem.SetValue(true, false)
+                        else
+                            if apexVersion == "Premium" then Atualizar("None", false) end
+                            tPrem.SetValue(false, false)
+                        end
+                    end)
+
+                CriarBotao(box, "Executar Script", sc.desc, function()
+                    local alvo
+                    if apexVersion == "Premium" then
+                        alvo = { nome = sc.nome, desc = sc.desc, url = sc.urlPremium }
+                    else
+                        alvo = { nome = sc.nome, desc = sc.desc, url = sc.urlFree }
+                    end
+                    ExecutarScript(alvo, jogo.nome)
+                end)
+            else
+                local b = CriarBotao(scriptScroll, sc.nome, sc.desc, function()
+                    ExecutarScript(sc, jogo.nome)
+                end)
+                b.LayoutOrder = ordem
+            end
+        end
+    end
+    Log("RenderScripts -> jogo:", jogo.nome, "| scripts:", #jogo.scripts)
+end
+
+IrParaJogo = function(jogo)
+    Estado.jogoSelecionado = jogo
+    LateralNome.Text = jogo.nome
+    LateralDesc.Text = jogo.desc or ""
+    RenderScripts(jogo)
+    PainelDetalhe.Position = UDim2.new(1, 0, 0, 0)
+    Tween(PainelLista, EASE_IN, { Position = UDim2.new(-1, 0, 0, 0) })
+    Tween(PainelDetalhe, EASE, { Position = UDim2.new(0, 0, 0, 0) })
+end
+
+MostrarListaJogos = function()
+    Estado.jogoSelecionado = nil
+    RenderListaJogos()
+    PainelLista.Position = UDim2.new(0, 0, 0, 0)
+    Tween(PainelDetalhe, EASE_IN, { Position = UDim2.new(1, 0, 0, 0) })
+    Tween(PainelLista, EASE, { Position = UDim2.new(0, 0, 0, 0) })
+end
+
+VoltarBtn.MouseButton1Click:Connect(function() MostrarListaJogos() end)
+
+Busca:GetPropertyChangedSignal("Text"):Connect(function()
+    Estado.busca = Busca.Text
+    if Estado.tela == "Jogos" then
+        if Estado.jogoSelecionado then
+            RenderScripts(Estado.jogoSelecionado)
+        else
+            RenderListaJogos()
+        end
+    end
+end)
+
+-- SECAO 16: FERRAMENTAS (toggles ligam/desligam de verdade)
+local FerramentasFrame = CriarTela("Ferramentas", "Ferramentas", false)
+local ferHolder = Inst("Frame", {
+    Position = UDim2.new(0, SP.xl, 0, SP.xs), Size = UDim2.new(1, -SP.xl * 2, 1, -SP.sm), BackgroundTransparency = 1
+}, FerramentasFrame)
+Lista(ferHolder, SP.sm)
+Inst("TextLabel", {
+    Size = UDim2.new(1, 0, 0, 13), BackgroundTransparency = 1,
+    Font = Enum.Font.Gotham, TextSize = T.micro, Text = "UTILITÁRIOS DE SISTEMA", TextColor3 = C.muted,
+    TextXAlignment = Enum.TextXAlignment.Left
+}, ferHolder)
+
+CriarToggle(ferHolder, "Restaurar o Cursor", "Força a visibilidade do ponteiro do mouse.", false, AplicarRestaurarCursor)
+RegistrarElemento("RestaurarCursor", function() return Ferramentas.RestaurarCursor end, function(value)
+    AplicarRestaurarCursor(value)
+    tCursor.SetValue(value, false)
+end)
+local tInstant = CriarToggle(ferHolder, "Instant Interact", "Interação instantânea com ProximityPrompts.", false, AplicarInstantInteract)
+RegistrarElemento("InstantInteract", function() return Ferramentas.InstantInteract end, function(value)
+    AplicarInstantInteract(value)
+    tInstant.SetValue(value, false)
+end)
+
+local MiscFrame = CriarTela("Misc", "Miscelânea", false)
+local miscHolder = Inst("Frame", {Position = UDim2.new(0, SP.xl, 0, SP.xs), Size = UDim2.new(1, -SP.xl * 2, 1, -SP.sm), BackgroundTransparency = 1}, MiscFrame)
+Lista(miscHolder, SP.sm)
+CriarBotao(miscHolder, "Infinite Yield", "Painel de comandos de admin universais.", function()
+    RegistrarThread(task.spawn(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))() end))
+end)
+
+local ConfigFrame = CriarTela("Config", "Configurações", false)
+local cfgHolder = Inst("Frame", {Position = UDim2.new(0, SP.xl, 0, SP.xs), Size = UDim2.new(1, -SP.xl * 2, 1, -SP.sm), BackgroundTransparency = 1}, ConfigFrame)
+Lista(cfgHolder, SP.sm)
+local configInput, configSelected = "", ""
+local cfgName = Inst("TextBox", {Size = UDim2.new(1,0,0,32), BackgroundColor3 = C.surface, Font = Enum.Font.Gotham, TextSize = T.body, PlaceholderText = "Nome da configuração", PlaceholderColor3 = C.muted, TextColor3 = C.text, ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left}, cfgHolder)
+Corner(cfgName, 8); Stroke(cfgName, C.borderSoft); Pad(cfgName, SP.md, 0, SP.md, 0)
+cfgName:GetPropertyChangedSignal("Text"):Connect(function() configInput = cfgName.Text end)
+CriarBotao(cfgHolder, "Salvar Config", "Salva o estado atual das opções.", function()
+    local name = configInput ~= "" and configInput or configSelected
+    if SaveConfig(name) then Notificar("Salvo!", "Configuração salva.", 2) else Notificar("Aviso", "Informe um nome válido para salvar.", 2) end
+end)
+CriarBotao(cfgHolder, "Carregar Config", "Carrega uma configuração pelo nome informado.", function()
+    LoadConfig(configInput ~= "" and configInput or configSelected)
+end)
+
+local function AjustarTamanho()
+    local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280,720)
+    Janela.Size = UDim2.fromOffset(math.clamp(viewport.X - 60,620,860), math.clamp(viewport.Y - 60,400,520))
+end
+AjustarTamanho()
+if workspace.CurrentCamera then RegistrarConexao(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(AjustarTamanho)) end
+Tween(Janela, EASE, {BackgroundTransparency = 0}); Tween(janelaStroke, EASE, {Transparency = 0}); Tween(Sidebar, EASE, {BackgroundTransparency = 0}); Tween(sidebarSep, EASE, {BackgroundTransparency = 0}); Tween(Perfil, EASE, {BackgroundTransparency = 0}); Tween(perfilStroke, EASE, {Transparency = 0}); Tween(headerSep, EASE, {Transparency = 0})
+MostrarTela("Home")
+print("[INIT SUCCESS] Hub pronta e utilizável!")
